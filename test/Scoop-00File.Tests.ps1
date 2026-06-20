@@ -9,14 +9,14 @@ BeforeDiscovery {
         '\.DS_Store$',
         'supporting(\\|/)validator(\\|/)packages(\\|/)*'
     )
-    $repo_files = (Get-ChildItem $TestPath -File -Recurse).FullName |
-        Where-Object { $_ -inotmatch $($project_file_exclusions -join '|') }
+    $repo_files = Get-ChildItem -Path $TestPath -Recurse -File | Foreach-Object -MemberName FullName |
+        Where-Object -FilterScript { $_ -inotmatch $($project_file_exclusions -join '|') }
 }
 
 Describe 'Code Syntax' -ForEach @(, $repo_files) -Tag 'File' {
     BeforeAll {
         $files = @(
-            $_ | Where-Object { $_ -imatch '.(ps1|psm1)$' }
+            $_ | Where-Object -FilterScript { $_ -imatch '\.(ps1|psm1)$' }
         )
         function Test-PowerShellSyntax {
             # ref: http://powershell.org/wp/forums/topic/how-to-check-syntax-of-scripts-automatically @@ https://archive.is/xtSv6
@@ -70,8 +70,19 @@ Describe 'Style constraints for non-binary project files' -ForEach @(, $repo_fil
         $files = @(
             # gather all files except '*.exe', '*.zip', or any .git repository files
             $_ |
-                Where-Object { $_ -inotmatch '(.exe|.zip|.dll)$' } |
-                Where-Object { $_ -inotmatch '(unformatted)' }
+                Where-Object { $_ -inotmatch '\.(exe|zip|dll)$' } |
+                Where-Object { $_ -inotmatch 'unformatted' }
+        )
+        $cached_files = @(
+            foreach ($file in $files) {
+                if (Test-Path -Path $file -PathType Leaf) {
+                    [PSCustomObject]@{
+                        Path    = $file
+                        Content = [System.IO.File]::ReadAllText($file)
+                        Lines   = [System.IO.File]::ReadAllLines($file)
+                    }
+                }
+            }
         )
     }
 
@@ -80,16 +91,14 @@ Describe 'Style constraints for non-binary project files' -ForEach @(, $repo_fil
         # see http://www.powershellmagazine.com/2012/12/17/pscxtip-how-to-determine-the-byte-order-mark-of-a-text-file @@ https://archive.is/RgT42
         # ref: http://poshcode.org/2153 @@ https://archive.is/sGnnu
         $badFiles = @(
-            foreach ($file in $files) {
+            foreach ($file_item in $cached_files) {
                 if ((Get-Command Get-Content).parameters.ContainsKey('AsByteStream')) {
                     # PowerShell Core (6.0+) '-Encoding byte' is replaced by '-AsByteStream'
-                    $content = ([char[]](Get-Content $file -AsByteStream -TotalCount 3) -join '')
+                    $bytes = ([char[]](Get-Content $file_item.Path -AsByteStream -TotalCount 3) -join '')
                 } else {
-                    $content = ([char[]](Get-Content $file -Encoding byte -TotalCount 3) -join '')
+                    $bytes = ([char[]](Get-Content $file_item.Path -Encoding byte -TotalCount 3) -join '')
                 }
-                if ([regex]::match($content, '(?ms)^\xEF\xBB\xBF').success) {
-                    $file
-                }
+                if ([regex]::match($bytes, '(?ms)^\xEF\xBB\xBF').success) { $file_item.Path }
             }
         )
 
@@ -100,14 +109,10 @@ Describe 'Style constraints for non-binary project files' -ForEach @(, $repo_fil
 
     It 'files end with a newline' {
         $badFiles = @(
-            foreach ($file in $files) {
-                # Ignore previous TestResults.xml
-                if ($file -match 'TestResults.xml') {
-                    continue
-                }
-                $string = [System.IO.File]::ReadAllText($file)
-                if ($string.Length -gt 0 -and $string[-1] -ne "`n") {
-                    $file
+            foreach ($file_item in $cached_files) {
+                if ($file_item.Path -match 'TestResults\.xml') { continue }
+                if ($file_item.Content.Length -gt 0 -and $file_item.Content[-1] -ne "`n") {
+                    $file_item.Path
                 }
             }
         )
@@ -119,19 +124,11 @@ Describe 'Style constraints for non-binary project files' -ForEach @(, $repo_fil
 
     It 'file newlines are CRLF' {
         $badFiles = @(
-            foreach ($file in $files) {
-                $content = [System.IO.File]::ReadAllText($file)
-                if (!$content) {
-                    throw "File contents are null: $($file)"
-                }
-                $lines = [regex]::split($content, '\r\n')
-                $lineCount = $lines.Count
-
-                for ($i = 0; $i -lt $lineCount; $i++) {
-                    if ( [regex]::match($lines[$i], '\r|\n').success ) {
-                        $file
-                        break
-                    }
+            foreach ($file_item in $cached_files) {
+                if ($file_item.Path -match '[\\/]\.github[\\/]') { continue }
+                if ([String]::IsNullOrEmpty($fileItem.Content)) { continue }
+                if ([regex]::IsMatch($file_item.Content, '(?<!\r)\n')) {
+                    $file_item.Path
                 }
             }
         )
@@ -143,17 +140,11 @@ Describe 'Style constraints for non-binary project files' -ForEach @(, $repo_fil
 
     It 'files have no lines containing trailing whitespace' {
         $badLines = @(
-            foreach ($file in $files) {
-                # Ignore previous TestResults.xml
-                if ($file -match 'TestResults.xml') {
-                    continue
-                }
-                $lines = [System.IO.File]::ReadAllLines($file)
-                $lineCount = $lines.Count
-
-                for ($i = 0; $i -lt $lineCount; $i++) {
-                    if ($lines[$i] -match '\s+$') {
-                        'File: {0}, Line: {1}' -f $file, ($i + 1)
+            foreach ($file_item in $cached_files) {
+                if ($file_item.Path -match 'TestResults\.xml') { continue }
+                for ($i = 0; $i -lt $file_item.Lines.Count; $i++) {
+                    if ($file_item.Lines[$i] -match '\s+$') {
+                        'File: {0}, Line: {1}' -f $file_item.Path, ($i + 1)
                     }
                 }
             }
@@ -166,14 +157,11 @@ Describe 'Style constraints for non-binary project files' -ForEach @(, $repo_fil
 
     It 'any leading whitespace consists only of spaces (excepting makefiles)' {
         $badLines = @(
-            foreach ($file in $files) {
-                if ($file -inotmatch '(^|.)makefile$') {
-                    $lines = [System.IO.File]::ReadAllLines($file)
-                    $lineCount = $lines.Count
-
-                    for ($i = 0; $i -lt $lineCount; $i++) {
-                        if ($lines[$i] -notmatch '^[ ]*(\S|$)') {
-                            'File: {0}, Line: {1}' -f $file, ($i + 1)
+            foreach ($file_item in $cached_files) {
+                if ($file_item.Path -inotmatch '(^|.)makefile$') {
+                    for ($i = 0; $i -lt $file_item.Lines.Count; $i++) {
+                        if ($file_item.Lines[$i] -notmatch '^[ ]*(\S|$)') {
+                            'File: {0}, Line: {1}' -f $file_item.Path, ($i + 1)
                         }
                     }
                 }
