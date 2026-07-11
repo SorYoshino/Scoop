@@ -1,6 +1,6 @@
 #Requires -Version 5.1
-#Requires -Modules @{ ModuleName = 'BuildHelpers'; ModuleVersion = '2.0.1' }
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.2.0' }
+#Requires -Modules @{ ModuleName = 'BuildHelpers'; ModuleVersion = '2.0.16' }
 param(
     [String] $BucketPath = $MyInvocation.PSScriptRoot
 )
@@ -16,9 +16,9 @@ Describe 'Manifest validates against the schema' {
         }
         if ($env:CI -eq $true) {
             Set-BuildEnvironment -Force
-            $manifestFiles = @(Get-GitChangedFile -Path $bucketDir -Include '*.json' -Commit $env:BHCommitHash)
+            [String[]]$manifestFiles = Get-GitChangedFile -Path $bucketDir -Include 'bucket/*.json' -Commit $env:BHCommitHash
         } else {
-            $manifestFiles = (Get-ChildItem $bucketDir -Filter '*.json' -Recurse).FullName
+            [String[]]$manifestFiles = Get-ChildItem -Path $bucketDir -Include '*.json' -Recurse -File | ForEach-Object -MemberName FullName
         }
     }
     BeforeAll {
